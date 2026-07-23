@@ -68,13 +68,41 @@ export function collectAmazonPageKind(documentRef: Document = document): AmazonP
       '[data-amazon-order-detail], #orderDetails, .order-details-container, [data-component="orderDetails"], [data-testid="order-details"]',
     ),
   );
-  const productionListCount = Array.from(
-    documentRef.querySelectorAll(".order-card, .js-order-card, .a-box-group.order"),
-  ).filter(
-    (card) =>
-      card.querySelector('a[href*="orderID="], a[href*="orderId="]') !== null ||
-      /\b\d{3}-\d{7}-\d{7}\b/.test(card.textContent ?? ""),
-  ).length;
+  const productionListCandidates = Array.from(
+    documentRef.querySelectorAll(
+      '.order-card, .js-order-card, .a-box-group.order, .order-card__list, [data-component="orderCard"]',
+    ),
+  );
+  const productionCandidateOrderIds = productionListCandidates.map((card) => {
+    const identifiers: string[] = [
+      ...((card.textContent ?? "").match(/\b\d{3}-\d{7}-\d{7}\b/g) ?? []),
+    ];
+    for (const link of card.querySelectorAll(
+      'a[href*="orderID="], a[href*="orderId="]',
+    )) {
+      const href = link.getAttribute("href") ?? "";
+      const rawIdentifier = href.match(/[?&]orderI[Dd]=([^&#]+)/)?.[1];
+      if (rawIdentifier) {
+        try {
+          identifiers.push(decodeURIComponent(rawIdentifier));
+        } catch {
+          identifiers.push(rawIdentifier);
+        }
+      }
+      identifiers.push(
+        ...(href.match(/\b\d{3}-\d{7}-\d{7}\b/g) ?? []),
+      );
+    }
+    return Array.from(new Set(identifiers));
+  });
+  const seenProductionOrderIds = new Set<string>();
+  const productionListCount = productionCandidateOrderIds.filter((identifiers) => {
+    if (identifiers.length !== 1 || seenProductionOrderIds.has(identifiers[0]!)) {
+      return false;
+    }
+    seenProductionOrderIds.add(identifiers[0]!);
+    return true;
+  }).length;
   const detailCount = detailCandidates.filter(
     (candidate, index) =>
       !detailCandidates.some(
@@ -118,15 +146,42 @@ export function collectAmazonOrderList(
   const syntheticRoots = Array.from(
     documentRef.querySelectorAll<HTMLElement>("[data-amazon-orders-list]"),
   );
-  const productionCards = Array.from(
+  const productionCardCandidates = Array.from(
     documentRef.querySelectorAll<HTMLElement>(
-      ".order-card, .js-order-card, .a-box-group.order",
+      '.order-card, .js-order-card, .a-box-group.order, .order-card__list, [data-component="orderCard"]',
     ),
-  ).filter(
-    (card) =>
-      card.querySelector('a[href*="orderID="], a[href*="orderId="]') !== null ||
-      /\b\d{3}-\d{7}-\d{7}\b/.test(card.textContent ?? ""),
   );
+  const productionCandidateOrderIds = productionCardCandidates.map((card) => {
+    const identifiers: string[] = [
+      ...((card.textContent ?? "").match(/\b\d{3}-\d{7}-\d{7}\b/g) ?? []),
+    ];
+    for (const link of card.querySelectorAll(
+      'a[href*="orderID="], a[href*="orderId="]',
+    )) {
+      const href = link.getAttribute("href") ?? "";
+      const rawIdentifier = href.match(/[?&]orderI[Dd]=([^&#]+)/)?.[1];
+      if (rawIdentifier) {
+        try {
+          identifiers.push(decodeURIComponent(rawIdentifier));
+        } catch {
+          identifiers.push(rawIdentifier);
+        }
+      }
+      identifiers.push(
+        ...(href.match(/\b\d{3}-\d{7}-\d{7}\b/g) ?? []),
+      );
+    }
+    return Array.from(new Set(identifiers));
+  });
+  const seenProductionOrderIds = new Set<string>();
+  const productionCards = productionCardCandidates.filter((_candidate, index) => {
+    const identifiers = productionCandidateOrderIds[index] ?? [];
+    if (identifiers.length !== 1 || seenProductionOrderIds.has(identifiers[0]!)) {
+      return false;
+    }
+    seenProductionOrderIds.add(identifiers[0]!);
+    return true;
+  });
   if (detailCount > 0 && syntheticRoots.length === 0 && productionCards.length === 0) {
     return { kind: "order_detail" };
   }
@@ -285,7 +340,7 @@ export function collectAmazonOrderList(
       ],
       orderTotal: [
         ...values(card, "[data-order-total]", ["data-order-total"], true),
-        ...labeledValues(card, /^ORDER\s+TOTAL:?$/i),
+        ...labeledValues(card, /^(?:ORDER\s+)?TOTAL:?$/i),
       ],
       status: values(
         card,
@@ -370,13 +425,41 @@ export function collectAmazonOrderDetail(
   }
 
   const syntheticListCount = documentRef.querySelectorAll("[data-amazon-orders-list]").length;
-  const productionListCount = Array.from(
-    documentRef.querySelectorAll(".order-card, .js-order-card, .a-box-group.order"),
-  ).filter(
-    (card) =>
-      card.querySelector('a[href*="orderID="], a[href*="orderId="]') !== null ||
-      /\b\d{3}-\d{7}-\d{7}\b/.test(card.textContent ?? ""),
-  ).length;
+  const productionListCandidates = Array.from(
+    documentRef.querySelectorAll(
+      '.order-card, .js-order-card, .a-box-group.order, .order-card__list, [data-component="orderCard"]',
+    ),
+  );
+  const productionCandidateOrderIds = productionListCandidates.map((card) => {
+    const identifiers: string[] = [
+      ...((card.textContent ?? "").match(/\b\d{3}-\d{7}-\d{7}\b/g) ?? []),
+    ];
+    for (const link of card.querySelectorAll(
+      'a[href*="orderID="], a[href*="orderId="]',
+    )) {
+      const href = link.getAttribute("href") ?? "";
+      const rawIdentifier = href.match(/[?&]orderI[Dd]=([^&#]+)/)?.[1];
+      if (rawIdentifier) {
+        try {
+          identifiers.push(decodeURIComponent(rawIdentifier));
+        } catch {
+          identifiers.push(rawIdentifier);
+        }
+      }
+      identifiers.push(
+        ...(href.match(/\b\d{3}-\d{7}-\d{7}\b/g) ?? []),
+      );
+    }
+    return Array.from(new Set(identifiers));
+  });
+  const seenProductionOrderIds = new Set<string>();
+  const productionListCount = productionCandidateOrderIds.filter((identifiers) => {
+    if (identifiers.length !== 1 || seenProductionOrderIds.has(identifiers[0]!)) {
+      return false;
+    }
+    seenProductionOrderIds.add(identifiers[0]!);
+    return true;
+  }).length;
   const roots = Array.from(
     documentRef.querySelectorAll<HTMLElement>(
       '[data-amazon-order-detail], #orderDetails, .order-details-container, [data-component="orderDetails"], [data-testid="order-details"]',
@@ -638,7 +721,6 @@ export function parseAmazonOrderList(
   if (collection.emptyMarker) throw new AmazonParseError("CONFLICTING_FIELD");
 
   const orders = collection.orders.map((raw) => {
-    if (raw.items.length === 0) throw new AmazonParseError("MISSING_FIELD");
     const status = parseStatus(raw.status);
     return {
       orderId: parseOrderId(raw.orderId),

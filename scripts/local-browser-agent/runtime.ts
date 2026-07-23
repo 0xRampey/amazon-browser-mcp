@@ -1,17 +1,18 @@
-import puppeteer, {
-  type Browser,
-  type HTTPRequest,
+import {
+  chromium,
+  type BrowserContext,
   type Page,
-} from "@cloudflare/puppeteer";
+  type Request as PlaywrightRequest,
+  type Route,
+} from "playwright-core";
+import { lstat, readdir, unlink } from "node:fs/promises";
+import { join } from "node:path";
 
 import {
-  BrowserbaseSessionError,
-  createBrowserbaseSession,
-  releaseBrowserbaseSession,
-} from "../../browser/browserbase";
-import { createNativeWebSocketTransport } from "../../browser/native-websocket-transport";
-import { evaluateAmazonRequest, isAmazonAuthenticationUrl } from "../../browser/request-guard";
-import type { Env } from "../../env";
+  evaluateAmazonRequest,
+  isBlockedAmazonOperationTarget,
+  isAmazonAuthenticationUrl,
+} from "../../src/browser/request-guard";
 import {
   AmazonParseError,
   collectAmazonOrderDetail,
@@ -22,31 +23,29 @@ import {
   parseUsdCents,
   sanitizeAmazonText,
   usdAmountFromCents,
-} from "./parser";
+} from "../../src/sites/amazon/parser";
 import {
   AmazonOperationError,
   type AmazonInternalOperation,
-} from "./operations";
+} from "../../src/sites/amazon/operations";
 import type {
   AmazonOrder,
   AmazonOrderDetail,
   AmazonOrderItem,
-  AmazonOrderStatus,
   AmazonOrderSummary,
   AmazonShipment,
   AmazonUsdAmount,
   RawAmazonOrderDetailCollection,
   RawAmazonOrderListCollection,
-} from "./types";
+} from "../../src/sites/amazon/types";
 import {
   buildAmazonOrderDetailUrl,
   buildAmazonOrderHistoryUrl,
   buildAmazonPaginationUrl,
-} from "./urls";
+} from "../../src/sites/amazon/urls";
 
 const NAVIGATION_TIMEOUT_MS = 45_000;
 const DOM_READY_TIMEOUT_MS = 12_000;
-const PROTOCOL_TIMEOUT_MS = 60_000;
 const MAX_DETAIL_FALLBACKS = 10;
 
 const PAGE_READY_SELECTOR = [
@@ -65,6 +64,29 @@ const PAGE_READY_SELECTOR = [
   "#captchacharacters",
 ].join(",");
 
+const CHROME_HARDENING_ARGUMENTS = [
+  "--disable-background-networking",
+  "--disable-component-update",
+  "--disable-default-apps",
+  "--disable-domain-reliability",
+  "--disable-features=AutofillServerCommunication,PasswordLeakDetection,PasswordManagerOnboarding",
+  "--disable-save-password-bubble",
+  "--disable-sync",
+  "--no-default-browser-check",
+  "--no-first-run",
+] as const;
+
+const CHROME_LOGIN_DATA_FILES = [
+  "Login Data",
+  "Login Data-journal",
+  "Login Data-shm",
+  "Login Data-wal",
+  "Login Data For Account",
+  "Login Data For Account-journal",
+  "Login Data For Account-shm",
+  "Login Data For Account-wal",
+] as const;
+
 interface PageGuardState {
   blockedNavigation: boolean;
 }
@@ -74,131 +96,315 @@ interface CollectedOrderPage {
   hasMore: boolean;
 }
 
-export async function executeAmazonOperation(
-  env: Env,
-  request: AmazonInternalOperation,
-): Promise<Record<string, unknown>> {
-  let browser: Browser | undefined;
-  let page: Page | undefined;
-  let transport: Awaited<ReturnType<typeof createNativeWebSocketTransport>> | undefined;
-  let sessionId: string | undefined;
+export class LocalAmazonRuntime {
+  private context: BrowserContext | undefined;
+  private closing = false;
+
+  constructor(
+    private readonly profileDirectory: string,
+    private readonly marketplace: string,
+  ) {}
+
+  async start(): Promise<void> {
+    if (this.context) return;
+    if (this.closing) throw new AmazonOperationError("TEMPORARY_FAILURE");
+
+    await purgeStoredPasswordData(this.profileDirectory);
+    const context = await chromium.launchPersistentContext(
+      this.profileDirectory,
+      buildProductionLaunchOptions(),
+    );
+    context.once("close", () => {
+      if (this.context === context) this.context = undefined;
+    });
+    this.context = context;
+
+    for (const page of context.pages()) {
+      await page.close({ runBeforeUnload: false }).catch(() => undefined);
+    }
+  }
+
+  async execute(
+    request: AmazonInternalOperation,
+  ): Promise<Record<string, unknown>> {
+    try {
+      await this.start();
+      const context = this.context;
+      if (!context) throw new AmazonOperationError("TEMPORARY_FAILURE");
+      const page = await createReadOnlyPage(context, this.marketplace);
+
+      try {
+        switch (request.action) {
+          case "session_status":
+            return await getSessionStatus(page, this.marketplace);
+          case "list_orders":
+            return await listOrders(page, this.marketplace, request);
+          case "get_order":
+            return await getOrder(page, this.marketplace, request.orderId);
+          case "find_orders":
+            return await findOrders(page, this.marketplace, request);
+        }
+        throw new AmazonOperationError("POLICY_BLOCKED");
+      } finally {
+        await page.close({ runBeforeUnload: false }).catch(() => undefined);
+      }
+    } catch (error) {
+      throw mapRuntimeError(error);
+    }
+  }
+
+  async close(): Promise<void> {
+    this.closing = true;
+    const context = this.context;
+    this.context = undefined;
+    if (context) await context.close().catch(() => undefined);
+  }
+}
+
+export async function runHeadfulLogin(
+  profileDirectory: string,
+  marketplace: string,
+): Promise<void> {
+  await purgeStoredPasswordData(profileDirectory);
+  const context = await chromium.launchPersistentContext(profileDirectory, {
+    ...buildLoginLaunchOptions(),
+  });
 
   try {
-    const session = await createBrowserbaseSession({
-      apiKey: env.BROWSERBASE_API_KEY,
-      contextId: env.AMAZON_CONTEXT_ID,
-      region: env.BROWSERBASE_REGION,
-      timeoutSeconds: 180,
-    });
-    sessionId = session.id;
-
-    transport = await createNativeWebSocketTransport(session.connectUrl);
-    browser = await puppeteer.connect({
-      transport,
-      defaultViewport: { width: 1_440, height: 1_000 },
-      protocolTimeout: PROTOCOL_TIMEOUT_MS,
-    });
-    page = await createGuardedPage(browser, env.AMAZON_MARKETPLACE);
-
-    switch (request.action) {
-      case "session_status":
-        return await getSessionStatus(page, env.AMAZON_MARKETPLACE);
-      case "list_orders":
-        return await listOrders(page, env.AMAZON_MARKETPLACE, request);
-      case "get_order":
-        return await getOrder(page, env.AMAZON_MARKETPLACE, request.orderId);
-      case "find_orders":
-        return await findOrders(page, env.AMAZON_MARKETPLACE, request);
+    const existingPages = context.pages();
+    const page = existingPages[0] ?? (await context.newPage());
+    for (const extraPage of existingPages.slice(1)) {
+      await extraPage.close({ runBeforeUnload: false }).catch(() => undefined);
     }
-    throw new AmazonOperationError("POLICY_BLOCKED");
-  } catch (error) {
-    throw mapServiceError(error);
+
+    await context.route("**/*", async (route) => {
+      const decision = evaluateLoginSetupRequest(describeRequest(route.request()), marketplace);
+      if (decision) {
+        await route.continue().catch(() => undefined);
+      } else {
+        await route.abort("blockedbyclient").catch(() => undefined);
+      }
+    });
+    page.on("popup", (popup) => {
+      void popup.close({ runBeforeUnload: false }).catch(() => undefined);
+    });
+    page.on("download", (download) => {
+      void download.cancel().catch(() => undefined);
+    });
+
+    await page.goto(buildAmazonOrderHistoryUrl(marketplace), {
+      waitUntil: "domcontentloaded",
+      timeout: NAVIGATION_TIMEOUT_MS,
+    });
+    await new Promise<void>((resolve) => context.once("close", () => resolve()));
   } finally {
-    if (page) {
-      await page.close().catch(() => undefined);
-    }
-    if (browser) {
-      await browser.close().catch(() => undefined);
-    }
-    transport?.close();
-    if (sessionId) {
-      await releaseBrowserbaseSession({
-        apiKey: env.BROWSERBASE_API_KEY,
-        sessionId,
-      }).catch(() => undefined);
+    await context.close().catch(() => undefined);
+    await purgeStoredPasswordData(profileDirectory);
+  }
+}
+
+/**
+ * The profile is dedicated to Amazon session state, never credentials. Chrome
+ * creates password-store databases even when password saving is disabled, so
+ * remove those databases after interactive login and before every read runtime.
+ */
+export async function purgeStoredPasswordData(profileDirectory: string): Promise<void> {
+  const entries = await readdir(profileDirectory, { withFileTypes: true });
+  const directories = [profileDirectory];
+  for (const entry of entries) {
+    if (entry.isDirectory()) directories.push(join(profileDirectory, entry.name));
+  }
+
+  for (const directory of directories) {
+    for (const filename of CHROME_LOGIN_DATA_FILES) {
+      const candidate = join(directory, filename);
+      let metadata;
+      try {
+        metadata = await lstat(candidate);
+      } catch (error) {
+        if (isMissingFileError(error)) continue;
+        throw error;
+      }
+      if (!metadata.isFile() && !metadata.isSymbolicLink()) {
+        throw new TypeError("The dedicated profile contains an invalid password-store path.");
+      }
+      await unlink(candidate);
     }
   }
 }
 
-export async function createGuardedPage(browser: Browser, marketplace: string): Promise<Page> {
-  const existingPages = await browser.pages();
-  for (const existing of existingPages) {
-    await existing.close().catch(() => undefined);
-  }
-  const page = await browser.newPage();
+function isMissingFileError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    Reflect.get(error, "code") === "ENOENT"
+  );
+}
 
+export function buildProductionLaunchOptions(): NonNullable<
+  Parameters<typeof chromium.launchPersistentContext>[1]
+> {
+  return {
+    acceptDownloads: false,
+    args: [...CHROME_HARDENING_ARGUMENTS],
+    chromiumSandbox: true,
+    headless: true,
+    javaScriptEnabled: false,
+    serviceWorkers: "block",
+    viewport: { width: 1_440, height: 1_000 },
+  };
+}
+
+export function buildLoginLaunchOptions(): NonNullable<
+  Parameters<typeof chromium.launchPersistentContext>[1]
+> {
+  return {
+    acceptDownloads: false,
+    args: [...CHROME_HARDENING_ARGUMENTS],
+    chromiumSandbox: true,
+    headless: false,
+    javaScriptEnabled: true,
+    serviceWorkers: "block",
+    viewport: null,
+  };
+}
+
+export interface LoginSetupRequest {
+  url: string;
+  method: string;
+  resourceType: string;
+  isNavigationRequest: boolean;
+}
+
+/**
+ * Login is the sole interactive exception to the production read-only policy.
+ * It opens only the fixed Amazon order URL and permits unsafe methods only on
+ * reviewed Amazon authentication/challenge paths. Production never calls this.
+ */
+export function evaluateLoginSetupRequest(
+  request: LoginSetupRequest,
+  marketplace: string,
+): boolean {
+  const method = request.method.trim().toUpperCase();
+  const resourceType = request.resourceType.trim().toLowerCase();
+  if (resourceType === "websocket" || resourceType === "eventsource") return false;
+
+  let url: URL;
+  try {
+    url = new URL(request.url);
+  } catch {
+    return false;
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.port !== ""
+  ) {
+    return false;
+  }
+
+  const primary = marketplace.toLocaleLowerCase("en-US");
+  const bare = primary.startsWith("www.") ? primary.slice(4) : primary;
+  const host = url.hostname.toLocaleLowerCase("en-US").replace(/\.$/u, "");
+  const marketplaceHost = host === primary || host === bare;
+  const assetHost =
+    host.endsWith(`.${bare}`) ||
+    host === "m.media-amazon.com" ||
+    host.endsWith(".ssl-images-amazon.com");
+  if (!marketplaceHost && !assetHost) return false;
+  if (isBlockedAmazonOperationTarget(request.url)) return false;
+
+  if (request.isNavigationRequest || resourceType === "document") {
+    if (
+      method === "POST" &&
+      marketplaceHost &&
+      isAmazonAuthenticationUrl(request.url, marketplace)
+    ) {
+      return true;
+    }
+    return evaluateAmazonRequest(
+      {
+        url: request.url,
+        method,
+        resourceType: "document",
+        isNavigationRequest: true,
+      },
+      marketplace,
+    ).allow;
+  }
+
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return true;
+  return (
+    method === "POST" &&
+    marketplaceHost &&
+    isAmazonAuthenticationUrl(request.url, marketplace)
+  );
+}
+
+export async function createReadOnlyPage(
+  context: BrowserContext,
+  marketplace: string,
+): Promise<Page> {
+  const page = await context.newPage();
   page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
   page.setDefaultTimeout(DOM_READY_TIMEOUT_MS);
 
-  // The extractor reads server-rendered order HTML and evaluates only our own
-  // collector functions over the finished DOM. Disabling site JavaScript keeps
-  // Amazon scripts from opening an unguarded popup, submitting a form, or
-  // issuing background requests; `page.evaluate` remains available over CDP.
-  await page.setJavaScriptEnabled(false);
-
-  const client = await page.createCDPSession();
+  const session = await context.newCDPSession(page);
   await Promise.all([
-    client.send("Network.setBypassServiceWorker", { bypass: true }),
-    client.send("Network.setCacheDisabled", { cacheDisabled: true }),
-    client.send("Browser.setDownloadBehavior", { behavior: "deny" }),
+    session.send("Network.setBypassServiceWorker", { bypass: true }),
+    session.send("Network.setCacheDisabled", { cacheDisabled: true }),
+    session.send("Browser.setDownloadBehavior", { behavior: "deny" }),
   ]);
 
   const guardState: PageGuardState = { blockedNavigation: false };
-  await page.setRequestInterception(true);
-  page.on("request", (request) => {
-    void handleRequest(request, marketplace, guardState);
+  await page.route("**/*", async (route) => {
+    await handleReadOnlyRoute(route, marketplace, guardState);
   });
   page.on("popup", (popup) => {
-    if (popup) void popup.close().catch(() => undefined);
+    void popup.close({ runBeforeUnload: false }).catch(() => undefined);
   });
-
+  page.on("download", (download) => {
+    void download.cancel().catch(() => undefined);
+  });
   Reflect.set(page, "__amazonGuardState", guardState);
   return page;
 }
 
-async function handleRequest(
-  request: HTTPRequest,
+async function handleReadOnlyRoute(
+  route: Route,
   marketplace: string,
   state: PageGuardState,
 ): Promise<void> {
+  const request = route.request();
   try {
-    const decision = evaluateAmazonRequest(
-      {
-        url: request.url(),
-        method: request.method(),
-        resourceType: request.resourceType(),
-        isNavigationRequest: request.isNavigationRequest(),
-      },
-      marketplace,
-    );
-
+    const decision = evaluateAmazonRequest(describeRequest(request), marketplace);
     if (decision.allow) {
-      await request.continue();
+      await route.continue();
       return;
     }
-    if (request.isNavigationRequest()) {
-      state.blockedNavigation = true;
-    }
-    await request.abort("blockedbyclient");
+    if (request.isNavigationRequest()) state.blockedNavigation = true;
+    await route.abort("blockedbyclient");
   } catch {
-    if (request.isNavigationRequest()) {
-      state.blockedNavigation = true;
-    }
-    await request.abort("blockedbyclient").catch(() => undefined);
+    if (request.isNavigationRequest()) state.blockedNavigation = true;
+    await route.abort("blockedbyclient").catch(() => undefined);
   }
 }
 
-async function navigate(page: Page, url: string, marketplace: string): Promise<void> {
+function describeRequest(request: PlaywrightRequest): LoginSetupRequest {
+  return {
+    url: request.url(),
+    method: request.method(),
+    resourceType: request.resourceType(),
+    isNavigationRequest: request.isNavigationRequest(),
+  };
+}
+
+async function navigate(
+  page: Page,
+  url: string,
+  marketplace: string,
+): Promise<void> {
   const state = Reflect.get(page, "__amazonGuardState") as PageGuardState | undefined;
   if (state) state.blockedNavigation = false;
 
@@ -220,10 +426,9 @@ async function navigate(page: Page, url: string, marketplace: string): Promise<v
   }
   if (status === 404) throw new AmazonOperationError("NOT_FOUND");
 
-  const finalUrl = page.url();
   const finalDecision = evaluateAmazonRequest(
     {
-      url: finalUrl,
+      url: page.url(),
       method: "GET",
       resourceType: "document",
       isNavigationRequest: true,
@@ -231,23 +436,27 @@ async function navigate(page: Page, url: string, marketplace: string): Promise<v
     marketplace,
   );
   if (!finalDecision.allow) throw new AmazonOperationError("POLICY_BLOCKED");
-
-  await page.waitForSelector(PAGE_READY_SELECTOR, { timeout: DOM_READY_TIMEOUT_MS }).catch(() => null);
+  await page.waitForSelector(PAGE_READY_SELECTOR, {
+    timeout: DOM_READY_TIMEOUT_MS,
+  }).catch(() => null);
 }
 
-async function getSessionStatus(page: Page, marketplace: string): Promise<Record<string, unknown>> {
+async function getSessionStatus(
+  page: Page,
+  marketplace: string,
+): Promise<Record<string, unknown>> {
   await navigate(page, buildAmazonOrderHistoryUrl(marketplace), marketplace);
-  const kind = await page.evaluate(collectAmazonPageKind as () => ReturnType<typeof collectAmazonPageKind>);
-  const url = page.url();
+  const kind = await page.evaluate(
+    collectAmazonPageKind as () => ReturnType<typeof collectAmazonPageKind>,
+  );
   const state =
-    kind === "signed_out" || isAmazonAuthenticationUrl(url, marketplace)
+    kind === "signed_out" || isAmazonAuthenticationUrl(page.url(), marketplace)
       ? "login_required"
       : kind === "challenge"
         ? "challenge_required"
         : kind === "orders_list"
           ? "authenticated"
           : "unavailable";
-
   return {
     state,
     profile_alias: "amazon-primary",
@@ -268,7 +477,6 @@ async function listOrders(
     return true;
   });
   const orders = filtered.slice(0, request.limit);
-
   return {
     orders: orders.map(toOrderSummaryResult),
     has_more: collected.hasMore || filtered.length > request.limit,
@@ -301,18 +509,26 @@ async function findOrders(
     ? sanitizeAmazonText(request.itemQuery, 100).toLocaleLowerCase("en-US")
     : undefined;
   candidates = candidates.filter((order) => {
-    if (targetDate && dateDistanceDays(order.orderDate, targetDate) > request.dateWindowDays) {
+    if (
+      targetDate &&
+      dateDistanceDays(order.orderDate, targetDate) > request.dateWindowDays
+    ) {
       return false;
     }
-    if (query && !getOrderItems(order).some((item) => item.title.toLocaleLowerCase("en-US").includes(query))) {
+    if (
+      query &&
+      !getOrderItems(order).some((item) =>
+        item.title.toLocaleLowerCase("en-US").includes(query),
+      )
+    ) {
       return false;
     }
     return true;
   });
 
-  const targetCents = request.amount === undefined ? undefined : parseUsdCents(request.amount);
+  const targetCents =
+    request.amount === undefined ? undefined : parseUsdCents(request.amount);
   const toleranceCents = parseUsdCents(request.amountTolerance);
-
   if (targetCents !== undefined) {
     const detailCandidates: AmazonOrder[] = [];
     for (const candidate of candidates.slice(0, MAX_DETAIL_FALLBACKS)) {
@@ -321,7 +537,9 @@ async function findOrders(
         continue;
       }
       try {
-        detailCandidates.push(await readOrderDetail(page, marketplace, candidate.orderId));
+        detailCandidates.push(
+          await readOrderDetail(page, marketplace, candidate.orderId),
+        );
       } catch (error) {
         if (error instanceof AmazonOperationError && error.code === "NOT_FOUND") {
           detailCandidates.push(candidate);
@@ -338,7 +556,6 @@ async function findOrders(
     .filter((candidate): candidate is RankedCandidate => candidate !== undefined)
     .sort(compareRankedCandidates)
     .slice(0, request.limit);
-
   const best = results[0];
   const equallyStrong = best
     ? results.filter(
@@ -396,7 +613,6 @@ async function collectOrderPages(
     if (pageNumber + 1 >= maxPages) break;
     url = buildAmazonPaginationUrl(marketplace, collection.nextPagePath);
   }
-
   return { orders: [...orders.values()], hasMore };
 }
 
@@ -453,7 +669,11 @@ function rankCandidate(
 
   if (query) {
     totalCriteria += 1;
-    if (!getOrderItems(order).some((item) => item.title.toLocaleLowerCase("en-US").includes(query))) {
+    if (
+      !getOrderItems(order).some((item) =>
+        item.title.toLocaleLowerCase("en-US").includes(query),
+      )
+    ) {
       return undefined;
     }
     matchedOn.push("item_title");
@@ -465,7 +685,10 @@ function rankCandidate(
   if (targetCents !== undefined) {
     totalCriteria += 1;
     const amounts = getOrderAmounts(order)
-      .map((entry) => ({ ...entry, delta: Math.abs(entry.amount.cents - targetCents) }))
+      .map((entry) => ({
+        ...entry,
+        delta: Math.abs(entry.amount.cents - targetCents),
+      }))
       .sort((left, right) => left.delta - right.delta || left.rank - right.rank);
     const closest = amounts[0];
     if (!closest || closest.delta > toleranceCents) return undefined;
@@ -485,7 +708,10 @@ function rankCandidate(
   };
 }
 
-function compareRankedCandidates(left: RankedCandidate, right: RankedCandidate): number {
+function compareRankedCandidates(
+  left: RankedCandidate,
+  right: RankedCandidate,
+): number {
   if (left.score !== right.score) return right.score - left.score;
   if ((left.amountDeltaCents ?? 0) !== (right.amountDeltaCents ?? 0)) {
     return (left.amountDeltaCents ?? 0) - (right.amountDeltaCents ?? 0);
@@ -505,7 +731,11 @@ function getOrderAmounts(order: AmazonOrder): Array<{
   if ("shipments" in order) {
     order.shipments.forEach((shipment, index) => {
       if (shipment.total) {
-        amounts.push({ amount: shipment.total, source: `shipment_${index + 1}_total`, rank: 1 });
+        amounts.push({
+          amount: shipment.total,
+          source: `shipment_${index + 1}_total`,
+          rank: 1,
+        });
       }
     });
   }
@@ -518,7 +748,10 @@ function getOrderItems(order: AmazonOrder): AmazonOrderItem[] {
     : order.items;
 }
 
-function sameOrderSummary(left: AmazonOrderSummary, right: AmazonOrderSummary): boolean {
+function sameOrderSummary(
+  left: AmazonOrderSummary,
+  right: AmazonOrderSummary,
+): boolean {
   return (
     left.orderDate === right.orderDate &&
     left.orderTotal.cents === right.orderTotal.cents &&
@@ -553,7 +786,9 @@ function toOrderDetailResult(order: AmazonOrderDetail): Record<string, unknown> 
           shipping: order.priceBreakdown.shipping
             ? toMoneyResult(order.priceBreakdown.shipping)
             : null,
-          tax: order.priceBreakdown.tax ? toMoneyResult(order.priceBreakdown.tax) : null,
+          tax: order.priceBreakdown.tax
+            ? toMoneyResult(order.priceBreakdown.tax)
+            : null,
           discounts: order.priceBreakdown.discounts
             ? toMoneyResult(order.priceBreakdown.discounts)
             : null,
@@ -564,7 +799,9 @@ function toOrderDetailResult(order: AmazonOrderDetail): Record<string, unknown> 
 }
 
 function toCommonOrderResult(order: AmazonOrder): Record<string, unknown> {
-  return "shipments" in order ? toOrderDetailResult(order) : toOrderSummaryResult(order);
+  return "shipments" in order
+    ? toOrderDetailResult(order)
+    : toOrderSummaryResult(order);
 }
 
 function toShipmentResult(shipment: AmazonShipment): Record<string, unknown> {
@@ -593,7 +830,7 @@ function dateDistanceDays(left: string, right: string): number {
   return Math.abs(Math.round((leftTime - rightTime) / 86_400_000));
 }
 
-function mapServiceError(error: unknown): AmazonOperationError {
+function mapRuntimeError(error: unknown): AmazonOperationError {
   if (error instanceof AmazonOperationError) return error;
   if (error instanceof AmazonParseError) {
     switch (error.code) {
@@ -604,15 +841,6 @@ function mapServiceError(error: unknown): AmazonOperationError {
       default:
         return new AmazonOperationError("PARSER_DRIFT");
     }
-  }
-  if (error instanceof BrowserbaseSessionError) {
-    if (error.code === "rate_limited") {
-      return new AmazonOperationError("RATE_LIMITED");
-    }
-    if (error.code === "quota_exhausted") {
-      return new AmazonOperationError("BROWSER_QUOTA_EXHAUSTED");
-    }
-    return new AmazonOperationError("TEMPORARY_FAILURE");
   }
   return new AmazonOperationError("TEMPORARY_FAILURE");
 }

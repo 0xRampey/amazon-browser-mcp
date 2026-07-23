@@ -4,7 +4,7 @@
  *
  * Durable Object instances process requests concurrently whenever a handler
  * awaits. Keeping this queue on the instance therefore prevents two requests
- * from operating on the same Browserbase context at once without holding the
+ * from operating on the same private browser profile at once without holding the
  * Durable Object's input gate with `blockConcurrencyWhile`.
  */
 export class SerialQueue {

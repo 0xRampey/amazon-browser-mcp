@@ -1,5 +1,8 @@
 # Copy to .dev.vars for local development. Never commit real values.
-BROWSERBASE_API_KEY=bb_live_replace_me
-AMAZON_CONTEXT_ID=replace_me
 GITHUB_CLIENT_ID=replace_me
 GITHUB_CLIENT_SECRET=replace_me
+LOCAL_BROWSER_AGENT_SECRET=replace_with_at_least_32_bytes
+
+# Required only when AMAZON_BROWSER_BACKEND is explicitly set to browserbase.
+BROWSERBASE_API_KEY=bb_live_replace_me
+AMAZON_CONTEXT_ID=replace_me

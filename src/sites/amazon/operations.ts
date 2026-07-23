@@ -135,7 +135,9 @@ export const AMAZON_OPERATION_ERROR_CODES = [
   "PARSER_DRIFT",
   "POLICY_BLOCKED",
   "BROWSER_QUOTA_EXHAUSTED",
+  "LOCAL_AGENT_UNAVAILABLE",
   "RATE_LIMITED",
+  "QUEUE_FULL",
   "TEMPORARY_FAILURE",
 ] as const;
 
@@ -170,8 +172,16 @@ const SAFE_ERROR_DETAILS: Record<
     message: "Browserbase browser-minute quota is exhausted.",
     userActionRequired: true,
   },
+  LOCAL_AGENT_UNAVAILABLE: {
+    message: "The local Amazon browser agent is unavailable. Start the Mac agent and try again.",
+    userActionRequired: true,
+  },
   RATE_LIMITED: {
     message: "Amazon temporarily limited this request.",
+    userActionRequired: false,
+  },
+  QUEUE_FULL: {
+    message: "Too many Amazon operations are pending.",
     userActionRequired: false,
   },
   TEMPORARY_FAILURE: {
@@ -196,4 +206,13 @@ export class AmazonOperationError extends Error {
     this.code = code;
     this.userActionRequired = details.userActionRequired;
   }
+}
+
+export function isAmazonOperationErrorCode(
+  value: unknown,
+): value is AmazonOperationErrorCode {
+  return (
+    typeof value === "string" &&
+    (AMAZON_OPERATION_ERROR_CODES as readonly string[]).includes(value)
+  );
 }

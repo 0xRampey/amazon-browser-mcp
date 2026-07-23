@@ -111,6 +111,12 @@ describe("MCP operation output boundary", () => {
       message: "Browserbase browser-minute quota is exhausted.",
       userActionRequired: true,
     });
+    expect(safeGatewayError("LOCAL_AGENT_UNAVAILABLE")).toEqual({
+      code: "LOCAL_AGENT_UNAVAILABLE",
+      message:
+        "The local Amazon browser agent is unavailable. Start the Mac agent and try again.",
+      userActionRequired: true,
+    });
     expect(safeGatewayError("bb_live_secret raw html")).toEqual({
       code: "TEMPORARY_FAILURE",
       message: "The Amazon browser service is temporarily unavailable.",
