@@ -1,0 +1,41 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "amazon-browser-mcp",
+  "main": "src/index.ts",
+  "workers_dev": true,
+  "preview_urls": false,
+  "compatibility_date": "2026-07-20",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "REPLACE_WITH_DEDICATED_OAUTH_KV_NAMESPACE_ID"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AMAZON_BROWSER",
+        "class_name": "AmazonBrowser"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["AmazonBrowser"]
+    }
+  ],
+  "vars": {
+    "ALLOWED_GITHUB_USER_ID": "REPLACE_WITH_ALLOWED_GITHUB_USER_ID",
+    "AMAZON_MARKETPLACE": "www.amazon.com",
+    "BROWSERBASE_REGION": "us-west-2"
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": false
+    }
+  }
+}

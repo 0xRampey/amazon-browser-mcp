@@ -1,0 +1,5 @@
+# Copy to .dev.vars for local development. Never commit real values.
+BROWSERBASE_API_KEY=bb_live_replace_me
+AMAZON_CONTEXT_ID=replace_me
+GITHUB_CLIENT_ID=replace_me
+GITHUB_CLIENT_SECRET=replace_me

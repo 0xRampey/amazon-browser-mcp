@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en-US">
+  <head><title>Order Details - Fictional Fixture</title></head>
+  <body>
+    <!-- Handcrafted test data. This is not captured Amazon markup or user data. -->
+    <main data-amazon-order-detail="fixture-v1" data-order-id="333-3333333-3333333">
+      <span data-order-id>Order number: 333-3333333-3333333</span>
+      <time data-order-date datetime="2026-07-09">July 9, 2026</time>
+      <span data-order-total="$44.67">Order total: $44.67</span>
+
+      <section data-shipment>
+        <span data-shipment-status="Delivered">Delivered</span>
+        <span data-shipment-total="$25.00">Shipment total: $25.00</span>
+        <div data-order-item data-asin="B0TEST0003" data-quantity="1">
+          <span data-item-title>Fictional Kitchen Brush</span>
+        </div>
+      </section>
+
+      <section data-shipment>
+        <span data-shipment-status="Shipped">Shipped</span>
+        <span data-shipment-total="$19.67">Shipment total: $19.67</span>
+        <div data-order-item data-asin="B0TEST0004" data-quantity="3">
+          <span data-item-title>Fictional Refill Pack</span>
+        </div>
+      </section>
+
+      <dl data-price-breakdown>
+        <div><dt>Items</dt><dd data-breakdown-subtotal="$45.00">Item subtotal: $45.00</dd></div>
+        <div><dt>Shipping</dt><dd data-breakdown-shipping="$0.00">Shipping: $0.00</dd></div>
+        <div><dt>Tax</dt><dd data-breakdown-tax="$4.67">Estimated tax: $4.67</dd></div>
+        <div><dt>Promotion</dt><dd data-breakdown-discounts="-$5.00">Promotion: -$5.00</dd></div>
+        <div><dt>Total</dt><dd data-breakdown-total="$44.67">Order total: $44.67</dd></div>
+      </dl>
+
+      <aside data-sensitive-decoy>
+        <p>987 Imaginary Avenue</p>
+        <p>Payment method: secret fixture card</p>
+        <a href="https://tracking.invalid/sensitive-token">Track package</a>
+      </aside>
+    </main>
+  </body>
+</html>
