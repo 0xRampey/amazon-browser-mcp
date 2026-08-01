@@ -1,6 +1,7 @@
 import {
   chromium,
   type BrowserContext,
+  type CDPSession,
   type Page,
   type Request as PlaywrightRequest,
   type Route,
@@ -73,6 +74,7 @@ const CHROME_HARDENING_ARGUMENTS = [
   "--disable-sync",
   "--no-default-browser-check",
   "--no-first-run",
+  "--start-minimized",
 ] as const;
 
 const LOGIN_CHROME_ARGUMENTS = [
@@ -124,6 +126,7 @@ export class LocalAmazonRuntime {
     });
     this.context = context;
 
+    await minimizeBrowserWindow(context);
     for (const page of context.pages()) {
       await page.close({ runBeforeUnload: false }).catch(() => undefined);
     }
@@ -237,12 +240,35 @@ export function buildProductionLaunchOptions(): NonNullable<
   return {
     acceptDownloads: false,
     args: [...CHROME_HARDENING_ARGUMENTS],
+    channel: "chromium",
     chromiumSandbox: true,
-    headless: true,
+    headless: false,
     javaScriptEnabled: false,
     serviceWorkers: "block",
     viewport: { width: 1_440, height: 1_000 },
   };
+}
+
+/** Keep the production browser out of the way without relying on macOS UI automation. */
+export async function minimizeBrowserWindow(
+  context: BrowserContext,
+  page: Page | undefined = context.pages()[0],
+): Promise<void> {
+  if (!page) return;
+
+  let session: CDPSession | undefined;
+  try {
+    session = await context.newCDPSession(page);
+    const { windowId } = await session.send("Browser.getWindowForTarget");
+    await session.send("Browser.setWindowBounds", {
+      windowId,
+      bounds: { windowState: "minimized" },
+    });
+  } catch {
+    // Window placement is presentation-only; read-only enforcement remains active.
+  } finally {
+    await session?.detach().catch(() => undefined);
+  }
 }
 
 export function buildLoginLaunchOptions(): NonNullable<
@@ -262,6 +288,7 @@ export async function createReadOnlyPage(
   marketplace: string,
 ): Promise<Page> {
   const page = await context.newPage();
+  await minimizeBrowserWindow(context, page);
   page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
   page.setDefaultTimeout(DOM_READY_TIMEOUT_MS);
 
