@@ -8,7 +8,6 @@ import {
   buildLoginLaunchOptions,
   buildProductionLaunchOptions,
   createReadOnlyPage,
-  evaluateLoginSetupRequest,
   purgeStoredPasswordData,
 } from "./runtime";
 
@@ -30,14 +29,19 @@ describe("local production browser hardening", () => {
   it("keeps only the login command headful and interactive", () => {
     const options = buildLoginLaunchOptions();
     expect(options).toMatchObject({
-      acceptDownloads: false,
       chromiumSandbox: true,
       headless: false,
       javaScriptEnabled: true,
-      serviceWorkers: "block",
       viewport: null,
     });
     expect(options).not.toHaveProperty("channel");
+    expect(options).not.toHaveProperty("acceptDownloads");
+    expect(options).not.toHaveProperty("serviceWorkers");
+    expect(options.args).toEqual([
+      "--disable-save-password-bubble",
+      "--no-default-browser-check",
+      "--no-first-run",
+    ]);
   });
 
   it("installs CDP and route defenses before production navigation", async () => {
@@ -100,128 +104,6 @@ describe("local production browser hardening", () => {
       abort,
     } as unknown as Route);
     expect(abort).toHaveBeenCalledWith("blockedbyclient");
-  });
-});
-
-describe("bounded interactive login policy", () => {
-  const base = {
-    resourceType: "document",
-    isNavigationRequest: true,
-  };
-
-  it("allows only fixed Amazon order/auth navigation and auth POSTs", () => {
-    expect(
-      evaluateLoginSetupRequest(
-        {
-          ...base,
-          url: "https://www.amazon.com/gp/css/order-history",
-          method: "GET",
-        },
-        "www.amazon.com",
-      ),
-    ).toBe(true);
-    expect(
-      evaluateLoginSetupRequest(
-        {
-          url: "https://opfcaptcha.amazon.com/captcha/script.js",
-          method: "GET",
-          resourceType: "script",
-          isNavigationRequest: false,
-        },
-        "www.amazon.com",
-      ),
-    ).toBe(true);
-    expect(
-      evaluateLoginSetupRequest(
-        {
-          ...base,
-          url: "https://www.amazon.com/ap/signin",
-          method: "POST",
-        },
-        "www.amazon.com",
-      ),
-    ).toBe(true);
-    expect(
-      evaluateLoginSetupRequest(
-        {
-          ...base,
-          url: "https://www.amazon.com/ap/mfa",
-          method: "POST",
-        },
-        "www.amazon.com",
-      ),
-    ).toBe(true);
-  });
-
-  it("blocks shopping, offsite, insecure, and persistent-channel requests", () => {
-    for (const request of [
-      {
-        ...base,
-        url: "https://www.amazon.com/gp/cart/view.html",
-        method: "GET",
-      },
-      {
-        ...base,
-        url: "https://example.com/gp/css/order-history",
-        method: "GET",
-      },
-      {
-        ...base,
-        url: "http://www.amazon.com/gp/css/order-history",
-        method: "GET",
-      },
-      {
-        url: "https://www.amazon.com/ap/signin",
-        method: "GET",
-        resourceType: "websocket",
-        isNavigationRequest: false,
-      },
-      {
-        url: "https://www.amazon.com/gp/css/order-history",
-        method: "POST",
-        resourceType: "fetch",
-        isNavigationRequest: false,
-      },
-      {
-        url: "https://www.amazon.com/gp/cart/add.html?asin=B0TEST0001",
-        method: "GET",
-        resourceType: "fetch",
-        isNavigationRequest: false,
-      },
-      {
-        url: "https://images-na.ssl-images-amazon.com/assets/login.js?next=%2Fcheckout",
-        method: "GET",
-        resourceType: "script",
-        isNavigationRequest: false,
-      },
-    ]) {
-      expect(evaluateLoginSetupRequest(request, "www.amazon.com")).toBe(false);
-    }
-  });
-
-  it("allows only safe Amazon-owned login subresources", () => {
-    expect(
-      evaluateLoginSetupRequest(
-        {
-          url: "https://m.media-amazon.com/images/login.js",
-          method: "GET",
-          resourceType: "script",
-          isNavigationRequest: false,
-        },
-        "www.amazon.com",
-      ),
-    ).toBe(true);
-    expect(
-      evaluateLoginSetupRequest(
-        {
-          url: "https://tracker.example/login.js",
-          method: "GET",
-          resourceType: "script",
-          isNavigationRequest: false,
-        },
-        "www.amazon.com",
-      ),
-    ).toBe(false);
   });
 });
 

@@ -67,7 +67,7 @@ selects the hosted Cloudflare-Puppeteer/Browserbase fallback.
 - Browserbase fallback secrets and Context state remain a separate,
   deliberately selected third-party trust boundary. Recording, logging,
   automated CAPTCHA solving, and keep-alive are disabled there.
-- The browser guard allows only read HTTP methods and reviewed Amazon order/sign-in/challenge paths. Site JavaScript is disabled during reads, and browser downloads are denied. Together with request interception, this blocks form submission, background writes, cart, checkout, buying, cancellation, returns, reviews, wishlists, settings, popups, downloads, and unapproved hosts.
+- During automated reads, the browser guard allows only read HTTP methods and reviewed Amazon order/sign-in/challenge paths. Site JavaScript is disabled, and browser downloads are denied. Together with request interception, this blocks form submission, background writes, cart, checkout, buying, cancellation, returns, reviews, wishlists, settings, popups, downloads, and unapproved hosts. The separate one-time, human-controlled login window does not intercept Amazon authentication traffic and is never exposed as an MCP browser tool.
 - Returned fields are limited to order IDs, dates, totals, statuses, item titles, ASINs, quantities, shipments, and price breakdowns.
 - Delivery addresses, recipient names, payment instruments, email, phone, tracking numbers, messages, URLs, raw HTML, screenshots, and cookies are excluded.
 - Site strings are normalized, length-limited, marked as untrusted web data, and never interpreted by an inner LLM.

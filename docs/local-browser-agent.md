@@ -37,13 +37,18 @@ request and response schemas.
   normal Chrome, Chromium, and Edge profile roots.
 
 The one-time `login` command is the sole interactive exception. It opens the
-fixed Amazon order-history URL, permits unsafe requests only to reviewed Amazon
-authentication paths, and closes popups/downloads. The user types credentials
-directly into Chrome. The code never receives them. Decline Chrome's password
-save prompt; the launch configuration also disables its password-save bubble.
-For a fail-closed guarantee, the agent removes Chrome's dedicated-profile
-`Login Data*` password databases after login and before every production start.
-The Cookies database that carries the Amazon session is left in place.
+fixed Amazon order-history URL in a visible, user-controlled browser but does
+not intercept Amazon's authentication requests, redirects, passkey ceremony,
+CAPTCHA, popups, or other login dependencies. This avoids coupling login to
+Amazon's changing authentication endpoints. The login browser is not exposed
+through MCP and the agent performs no clicks, typing, or form submissions; the
+user controls it directly. Production read-only restrictions resume when the
+headless service starts. The code never receives credentials. Decline Chrome's
+password save prompt; the launch configuration also disables its password-save
+bubble. For a fail-closed guarantee, the agent removes Chrome's
+dedicated-profile `Login Data*` password databases after login and before every
+production start. The Cookies database that carries the Amazon session is left
+in place.
 
 ## Install
 

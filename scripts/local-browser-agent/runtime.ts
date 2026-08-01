@@ -10,7 +10,6 @@ import { join } from "node:path";
 
 import {
   evaluateAmazonRequest,
-  isBlockedAmazonOperationTarget,
   isAmazonAuthenticationUrl,
 } from "../../src/browser/request-guard";
 import {
@@ -72,6 +71,12 @@ const CHROME_HARDENING_ARGUMENTS = [
   "--disable-features=AutofillServerCommunication,PasswordLeakDetection,PasswordManagerOnboarding",
   "--disable-save-password-bubble",
   "--disable-sync",
+  "--no-default-browser-check",
+  "--no-first-run",
+] as const;
+
+const LOGIN_CHROME_ARGUMENTS = [
+  "--disable-save-password-bubble",
   "--no-default-browser-check",
   "--no-first-run",
 ] as const;
@@ -177,21 +182,6 @@ export async function runHeadfulLogin(
       await extraPage.close({ runBeforeUnload: false }).catch(() => undefined);
     }
 
-    await context.route("**/*", async (route) => {
-      const decision = evaluateLoginSetupRequest(describeRequest(route.request()), marketplace);
-      if (decision) {
-        await route.continue().catch(() => undefined);
-      } else {
-        await route.abort("blockedbyclient").catch(() => undefined);
-      }
-    });
-    page.on("popup", (popup) => {
-      void popup.close({ runBeforeUnload: false }).catch(() => undefined);
-    });
-    page.on("download", (download) => {
-      void download.cancel().catch(() => undefined);
-    });
-
     await page.goto(buildAmazonOrderHistoryUrl(marketplace), {
       waitUntil: "domcontentloaded",
       timeout: NAVIGATION_TIMEOUT_MS,
@@ -259,87 +249,12 @@ export function buildLoginLaunchOptions(): NonNullable<
   Parameters<typeof chromium.launchPersistentContext>[1]
 > {
   return {
-    acceptDownloads: false,
-    args: [...CHROME_HARDENING_ARGUMENTS],
+    args: [...LOGIN_CHROME_ARGUMENTS],
     chromiumSandbox: true,
     headless: false,
     javaScriptEnabled: true,
-    serviceWorkers: "block",
     viewport: null,
   };
-}
-
-export interface LoginSetupRequest {
-  url: string;
-  method: string;
-  resourceType: string;
-  isNavigationRequest: boolean;
-}
-
-/**
- * Login is the sole interactive exception to the production read-only policy.
- * It opens only the fixed Amazon order URL and permits unsafe methods only on
- * reviewed Amazon authentication/challenge paths. Production never calls this.
- */
-export function evaluateLoginSetupRequest(
-  request: LoginSetupRequest,
-  marketplace: string,
-): boolean {
-  const method = request.method.trim().toUpperCase();
-  const resourceType = request.resourceType.trim().toLowerCase();
-  if (resourceType === "websocket" || resourceType === "eventsource") return false;
-
-  let url: URL;
-  try {
-    url = new URL(request.url);
-  } catch {
-    return false;
-  }
-  if (
-    url.protocol !== "https:" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.port !== ""
-  ) {
-    return false;
-  }
-
-  const primary = marketplace.toLocaleLowerCase("en-US");
-  const bare = primary.startsWith("www.") ? primary.slice(4) : primary;
-  const host = url.hostname.toLocaleLowerCase("en-US").replace(/\.$/u, "");
-  const marketplaceHost = host === primary || host === bare;
-  const assetHost =
-    host.endsWith(`.${bare}`) ||
-    host === "m.media-amazon.com" ||
-    host.endsWith(".ssl-images-amazon.com");
-  if (!marketplaceHost && !assetHost) return false;
-  if (isBlockedAmazonOperationTarget(request.url)) return false;
-
-  if (request.isNavigationRequest || resourceType === "document") {
-    if (
-      method === "POST" &&
-      marketplaceHost &&
-      isAmazonAuthenticationUrl(request.url, marketplace)
-    ) {
-      return true;
-    }
-    return evaluateAmazonRequest(
-      {
-        url: request.url,
-        method,
-        resourceType: "document",
-        isNavigationRequest: true,
-      },
-      marketplace,
-    ).allow;
-  }
-
-  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return true;
-  return (
-    method === "POST" &&
-    marketplaceHost &&
-    isAmazonAuthenticationUrl(request.url, marketplace)
-  );
 }
 
 export async function createReadOnlyPage(
@@ -391,7 +306,7 @@ async function handleReadOnlyRoute(
   }
 }
 
-function describeRequest(request: PlaywrightRequest): LoginSetupRequest {
+function describeRequest(request: PlaywrightRequest) {
   return {
     url: request.url(),
     method: request.method(),

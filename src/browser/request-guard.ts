@@ -197,20 +197,6 @@ export function isAmazonAuthenticationUrl(url: string, marketplace: string): boo
   return path !== undefined && AUTH_PATHS.some((allowed) => matchesPath(path, allowed));
 }
 
-/**
- * Reject URL targets whose normalized path or query names a known write-like
- * Amazon operation. Callers must still enforce their own host allowlist.
- */
-export function isBlockedAmazonOperationTarget(value: string): boolean {
-  const parsedUrl = parseHttpsUrl(value);
-  if (parsedUrl.reason !== undefined) return true;
-  const canonicalTarget = canonicalizeTarget(parsedUrl.url);
-  return (
-    canonicalTarget === undefined ||
-    containsBlockedOperation(canonicalTarget.path, canonicalTarget.queryParts)
-  );
-}
-
 export function normalizeAmazonMarketplace(marketplace: string): string | undefined {
   return parseMarketplace(marketplace)?.primaryHost;
 }
