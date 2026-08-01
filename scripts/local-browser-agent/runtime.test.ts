@@ -8,25 +8,27 @@ import {
   buildLoginLaunchOptions,
   buildProductionLaunchOptions,
   createReadOnlyPage,
+  minimizeBrowserWindow,
   purgeStoredPasswordData,
 } from "./runtime";
 
 describe("local production browser hardening", () => {
-  it("uses a headless dedicated Chrome context with scripts, workers, and downloads disabled", () => {
+  it("uses minimized full Chromium with scripts, workers, and downloads disabled", () => {
     const options = buildProductionLaunchOptions();
     expect(options).toMatchObject({
       acceptDownloads: false,
+      channel: "chromium",
       chromiumSandbox: true,
-      headless: true,
+      headless: false,
       javaScriptEnabled: false,
       serviceWorkers: "block",
       viewport: { width: 1_440, height: 1_000 },
     });
-    expect(options).not.toHaveProperty("channel");
     expect(options.args).toContain("--disable-save-password-bubble");
+    expect(options.args).toContain("--start-minimized");
   });
 
-  it("keeps only the login command headful and interactive", () => {
+  it("keeps the login command visible and interactive", () => {
     const options = buildLoginLaunchOptions();
     expect(options).toMatchObject({
       chromiumSandbox: true,
@@ -44,6 +46,47 @@ describe("local production browser hardening", () => {
     ]);
   });
 
+  it("minimizes the production window through CDP", async () => {
+    const page = {} as Page;
+    const send = vi.fn(async (method: string) =>
+      method === "Browser.getWindowForTarget" ? { windowId: 17 } : {},
+    );
+    const detach = vi.fn(async () => undefined);
+    const context = {
+      pages: () => [page],
+      newCDPSession: vi.fn(async () => ({ send, detach })),
+    };
+
+    await expect(
+      minimizeBrowserWindow(context as unknown as BrowserContext),
+    ).resolves.toBeUndefined();
+    expect(send).toHaveBeenNthCalledWith(1, "Browser.getWindowForTarget");
+    expect(send).toHaveBeenNthCalledWith(2, "Browser.setWindowBounds", {
+      windowId: 17,
+      bounds: { windowState: "minimized" },
+    });
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
+  it("does not fail startup when the browser window cannot be minimized", async () => {
+    const page = {} as Page;
+    const detach = vi.fn(async () => undefined);
+    const context = {
+      pages: () => [page],
+      newCDPSession: vi.fn(async () => ({
+        send: vi.fn(async () => {
+          throw new Error("fictional CDP failure");
+        }),
+        detach,
+      })),
+    };
+
+    await expect(
+      minimizeBrowserWindow(context as unknown as BrowserContext),
+    ).resolves.toBeUndefined();
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
   it("installs CDP and route defenses before production navigation", async () => {
     const send = vi.fn(async () => undefined);
     let routeHandler: ((route: Route) => Promise<void>) | undefined;
@@ -59,8 +102,12 @@ describe("local production browser hardening", () => {
       }),
     };
     const context = {
+      pages: () => [page],
       newPage: vi.fn(async () => page),
-      newCDPSession: vi.fn(async () => ({ send })),
+      newCDPSession: vi.fn(async () => ({
+        send,
+        detach: vi.fn(async () => undefined),
+      })),
     };
 
     await expect(

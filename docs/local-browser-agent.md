@@ -26,9 +26,10 @@ request and response schemas.
   `get_order`, or `find_orders` schemas.
 - There is no URL, click, type, JavaScript, screenshot, download, cookie,
   password, raw-HTML, or raw-page endpoint.
-- Production Chromium is headless with page JavaScript, service workers,
-  downloads, popups, unsafe HTTP methods, subresources, and unapproved
-  navigation disabled.
+- Production uses full Chromium in a minimized window because Amazon requires
+  the headed browser identity for the authenticated Orders page. Page
+  JavaScript, service workers, downloads, popups, unsafe HTTP methods,
+  subresources, and unapproved navigation remain disabled.
 - Every successful result is checked against the existing exact MCP output
   schema before it leaves the process. Unexpected fields fail closed.
 - Runtime errors and logs never include URLs, HTML, cookies, order content, or
@@ -43,9 +44,9 @@ CAPTCHA, popups, or other login dependencies. This avoids coupling login to
 Amazon's changing authentication endpoints. The login browser is not exposed
 through MCP and the agent performs no clicks, typing, or form submissions; the
 user controls it directly. Production read-only restrictions resume when the
-headless service starts. The code never receives credentials. Decline Chrome's
-password save prompt; the launch configuration also disables its password-save
-bubble. For a fail-closed guarantee, the agent removes Chrome's
+background browser service starts. The code never receives credentials. Decline
+Chrome's password save prompt; the launch configuration also disables its
+password-save bubble. For a fail-closed guarantee, the agent removes Chrome's
 dedicated-profile `Login Data*` password databases after login and before every
 production start. The Cookies database that carries the Amazon session is left
 in place.
