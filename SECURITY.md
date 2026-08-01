@@ -44,7 +44,7 @@ Amazon-derived strings are untrusted data. The parser must remain deterministic 
 
 Production reads disable site JavaScript and browser downloads before navigating. Do not relax either control merely to accommodate layout drift; review and test any narrower exception against the read-only network policy first.
 
-OAuth dynamically registers only clients whose redirect URIs are on the official ChatGPT or Claude origins, revalidates that origin during authorization, requires explicit consent, and embeds the `amazon.read` grant in protected token properties. Dynamic registration remains a public protocol endpoint and can still receive abusive registration traffic; use Cloudflare rate limiting if that becomes operationally material.
+OAuth dynamically registers only clients whose redirect URIs are on the official ChatGPT or Claude origins or match the exact native Codex loopback callback, revalidates that URI during authorization, requires explicit consent, and embeds the `amazon.read` grant in protected token properties. Dynamic registration remains a public protocol endpoint and can still receive abusive registration traffic; use Cloudflare rate limiting if that becomes operationally material.
 
 ## Vulnerability reports
 

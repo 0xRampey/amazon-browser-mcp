@@ -57,7 +57,7 @@ selects the hosted Cloudflare-Puppeteer/Browserbase fallback.
 - The GitHub OAuth secret and local-agent HMAC secret are encrypted Cloudflare
   Worker secrets. The same HMAC secret and tunnel token live in macOS Keychain,
   never in source.
-- OAuth authorization accepts only official ChatGPT and Claude callback origins. After GitHub login, the Worker shows the connector name, callback origin, and `amazon.read` scope and requires one explicit approval click. The approval POST ends on a same-origin handoff page before continuing to the connector, avoiding embedded Chromium's cross-origin form-redirect restriction.
+- OAuth authorization accepts only official ChatGPT and Claude callback origins plus the exact native Codex loopback callback. After GitHub login, the Worker shows the connector name, callback origin, and `amazon.read` scope and requires one explicit approval click. The approval POST ends on a same-origin handoff page before continuing to the connector, avoiding embedded Chromium's cross-origin form-redirect restriction.
 - Amazon credentials are entered manually into a dedicated local Chrome
   profile. The code never receives them, and `Login Data*` is purged after
   login and before every production start. Amazon cookies remain on the Mac.
