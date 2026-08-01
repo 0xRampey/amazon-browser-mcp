@@ -72,6 +72,7 @@ describe("Amazon page classification", () => {
   it.each([
     ["orders-list.html", "orders_list"],
     ["orders-list-fallback.html", "orders_list"],
+    ["orders-list-current.html", "orders_list"],
     ["orders-empty.html", "orders_list"],
     ["order-detail.html", "order_detail"],
     ["order-detail-fallback.html", "order_detail"],
@@ -182,6 +183,148 @@ describe("Amazon order-list fixtures", () => {
             quantity: 1,
           },
         ],
+      },
+    ]);
+  });
+
+  it("parses a current-shape TOTAL header and deduplicates nested card roots", () => {
+    const document = fixtureDocument("orders-list-current.html");
+    const collection = collectAmazonOrderList(document);
+    expect(collection.kind).toBe("orders_list");
+    if (collection.kind !== "orders_list") throw new Error("unexpected collection kind");
+
+    expect(
+      document.querySelectorAll(
+        '.order-card, .order-card__list, [data-component="orderCard"]',
+      ),
+    ).toHaveLength(2);
+    expect(collection.orders).toHaveLength(1);
+    expect(collection.orders[0]?.orderTotal).toEqual(["$12.34"]);
+    expect(collectAmazonOrderDetail(document)).toEqual({ kind: "orders_list" });
+    expect(parseAmazonOrderList(collection)).toEqual([
+      {
+        orderId: "888-8888888-8888888",
+        orderDate: "2026-07-22",
+        orderTotal: { currency: "USD", cents: 1_234, decimal: "12.34" },
+        status: "delivered",
+        statusLabel: "Delivered July 23",
+        items: [
+          {
+            title: "Fictional Current-Shape Item",
+            asin: "B0CURR0001",
+            quantity: 1,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps each inner order when one list wrapper contains multiple cards", () => {
+    const document = documentFrom(`
+      <section class="order-card__list">
+        <article data-component="orderCard">
+          <div><span>ORDER PLACED</span><span>July 20, 2026</span></div>
+          <div><span>TOTAL</span><span>$10.00</span></div>
+          <span class="yohtmlc-order-id">610-1111111-1111111</span>
+          <a href="/your-orders/order-details?orderID=610-1111111-1111111">Details</a>
+          <h3>Delivered July 21</h3>
+        </article>
+        <article data-component="orderCard">
+          <div><span>ORDER PLACED</span><span>July 19, 2026</span></div>
+          <div><span>TOTAL</span><span>$20.00</span></div>
+          <span class="yohtmlc-order-id">620-2222222-2222222</span>
+          <a href="/your-orders/order-details?orderID=620-2222222-2222222">Details</a>
+          <h3>Shipped</h3>
+        </article>
+      </section>
+    `);
+
+    expect(
+      document.querySelectorAll('.order-card__list, [data-component="orderCard"]'),
+    ).toHaveLength(3);
+    const collection = collectAmazonOrderList(document);
+    expect(collection.kind).toBe("orders_list");
+    if (collection.kind !== "orders_list") throw new Error("unexpected collection kind");
+
+    expect(collection.orders).toHaveLength(2);
+    expect(parseAmazonOrderList(collection).map((order) => order.orderId)).toEqual([
+      "610-1111111-1111111",
+      "620-2222222-2222222",
+    ]);
+  });
+
+  it("recognizes a data-component order card without legacy card classes", () => {
+    const document = documentFrom(`
+      <article data-component="orderCard">
+        <div><span>ORDER PLACED</span><span>July 21, 2026</span></div>
+        <div><span>TOTAL</span><span>$7.00</span></div>
+        <span class="yohtmlc-order-id">777-7777777-7777777</span>
+        <a href="/your-orders/order-details?orderID=777-7777777-7777777">Details</a>
+      </article>
+    `);
+
+    expect(collectAmazonPageKind(document)).toBe("orders_list");
+    const collection = collectAmazonOrderList(document);
+    expect(collection.kind).toBe("orders_list");
+    if (collection.kind !== "orders_list") throw new Error("unexpected collection kind");
+    expect(collection.orders).toHaveLength(1);
+    expect(collectAmazonOrderDetail(document)).toEqual({ kind: "orders_list" });
+  });
+
+  it("does not treat SUBTOTAL or ITEM TOTAL as an order total", () => {
+    const document = documentFrom(`
+      <article class="order-card" data-component="orderCard">
+        <div><span>ORDER PLACED</span><span>July 22, 2026</span></div>
+        <div><span>SUBTOTAL</span><span>$8.00</span></div>
+        <div><span>ITEM TOTAL</span><span>$9.00</span></div>
+        <span class="yohtmlc-order-id">888-8888888-8888888</span>
+        <a href="/your-orders/order-details?orderID=888-8888888-8888888">Details</a>
+      </article>
+    `);
+    const collection = collectAmazonOrderList(document);
+    expect(collection.kind).toBe("orders_list");
+    if (collection.kind !== "orders_list") throw new Error("unexpected collection kind");
+
+    expect(collection.orders[0]?.orderTotal).toEqual([]);
+    expectParseError(() => parseAmazonOrderList(collection), "MISSING_FIELD");
+  });
+
+  it("rejects conflicting exact TOTAL and ORDER TOTAL values", () => {
+    const document = documentFrom(`
+      <article class="order-card" data-component="orderCard">
+        <div><span>ORDER PLACED</span><span>July 22, 2026</span></div>
+        <div><span>TOTAL</span><span>$8.00</span></div>
+        <div><span>ORDER TOTAL</span><span>$9.00</span></div>
+        <span class="yohtmlc-order-id">888-8888888-8888888</span>
+        <a href="/your-orders/order-details?orderID=888-8888888-8888888">Details</a>
+      </article>
+    `);
+    const collection = collectAmazonOrderList(document);
+    expect(collection.kind).toBe("orders_list");
+    if (collection.kind !== "orders_list") throw new Error("unexpected collection kind");
+
+    expect(collection.orders[0]?.orderTotal).toEqual(["$8.00", "$9.00"]);
+    expectParseError(() => parseAmazonOrderList(collection), "CONFLICTING_FIELD");
+  });
+
+  it("returns a core-valid order with an empty item preview instead of failing the page", () => {
+    const document = documentFrom(`
+      <article class="order-card">
+        <div><span>ORDER PLACED</span><span>July 22, 2026</span></div>
+        <div><span>TOTAL</span><span>$8.00</span></div>
+        <span class="yohtmlc-order-id">888-8888888-8888888</span>
+        <a href="/your-orders/order-details?orderID=888-8888888-8888888">Details</a>
+      </article>
+    `);
+
+    expect(parseAmazonOrderListDocument(document)).toEqual([
+      {
+        orderId: "888-8888888-8888888",
+        orderDate: "2026-07-22",
+        orderTotal: { currency: "USD", cents: 800, decimal: "8.00" },
+        status: "unknown",
+        statusLabel: "Unknown",
+        items: [],
       },
     ]);
   });

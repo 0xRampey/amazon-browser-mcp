@@ -156,6 +156,10 @@ export const SAFE_GATEWAY_ERRORS = {
     message: "Browserbase browser-minute quota is exhausted.",
     userActionRequired: true,
   },
+  LOCAL_AGENT_UNAVAILABLE: {
+    message: "The local Amazon browser agent is unavailable. Start the Mac agent and try again.",
+    userActionRequired: true,
+  },
   RATE_LIMITED: {
     message: "Amazon temporarily limited this request.",
     userActionRequired: false,

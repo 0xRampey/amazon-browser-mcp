@@ -6,6 +6,7 @@ import {
   githubAuthorizationHandler,
   validateConnectorRegistration,
 } from "./auth/github";
+import { amazonBackendConfigurationError } from "./browser/amazon-backend";
 import type { Env } from "./env";
 import { DurableObjectAmazonGateway } from "./mcp/gateway";
 import { createAmazonMcpServer } from "./mcp/server";
@@ -25,12 +26,9 @@ class McpApiHandler extends WorkerEntrypoint<Env, AuthProps> {
       return new Response("Forbidden", { status: 403 });
     }
 
-    const missing = [
-      ["BROWSERBASE_API_KEY", this.env.BROWSERBASE_API_KEY],
-      ["AMAZON_CONTEXT_ID", this.env.AMAZON_CONTEXT_ID],
-    ].find(([, value]) => !value);
-    if (missing) {
-      return new Response(`${missing[0]} is not configured.`, { status: 503 });
+    const configurationError = amazonBackendConfigurationError(this.env);
+    if (configurationError) {
+      return new Response(configurationError, { status: 503 });
     }
 
     const server = createAmazonMcpServer(new DurableObjectAmazonGateway(this.env));

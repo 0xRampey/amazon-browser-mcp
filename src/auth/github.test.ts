@@ -8,6 +8,9 @@ import {
   validateConnectorRegistration,
 } from "./github";
 
+const FIXTURE_GITHUB_USER_ID_NUMBER = 9_876_543_210;
+const FIXTURE_GITHUB_USER_ID = String(FIXTURE_GITHUB_USER_ID_NUMBER);
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -88,7 +91,9 @@ describe("connector client policy", () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(Response.json({ access_token: "github-token" }))
-      .mockResolvedValueOnce(Response.json({ id: 2914233, login: "allowed-user" }));
+      .mockResolvedValueOnce(
+        Response.json({ id: FIXTURE_GITHUB_USER_ID_NUMBER, login: "allowed-user" }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const start = await githubAuthorizationHandler.fetch(
@@ -149,11 +154,11 @@ describe("connector client policy", () => {
     ]);
     expect(completeAuthorization).toHaveBeenCalledWith(
       expect.objectContaining({
-        userId: "2914233",
+        userId: FIXTURE_GITHUB_USER_ID,
         scope: ["amazon.read"],
         props: {
           githubLogin: "allowed-user",
-          githubUserId: "2914233",
+          githubUserId: FIXTURE_GITHUB_USER_ID,
           amazonRead: true,
         },
       }),
@@ -167,7 +172,9 @@ describe("connector client policy", () => {
       vi
         .fn<typeof fetch>()
         .mockResolvedValueOnce(Response.json({ access_token: "github-token" }))
-        .mockResolvedValueOnce(Response.json({ id: 2914233, login: "allowed-user" })),
+        .mockResolvedValueOnce(
+          Response.json({ id: FIXTURE_GITHUB_USER_ID_NUMBER, login: "allowed-user" }),
+        ),
     );
 
     const start = await githubAuthorizationHandler.fetch(
@@ -259,7 +266,7 @@ function testEnvironment(
     OAUTH_PROVIDER: oauthProvider,
     GITHUB_CLIENT_ID: "github-client",
     GITHUB_CLIENT_SECRET: "github-secret",
-    ALLOWED_GITHUB_USER_ID: "2914233",
+    ALLOWED_GITHUB_USER_ID: FIXTURE_GITHUB_USER_ID,
   } as unknown as Env;
 
   return { env, get, put, remove, completeAuthorization };

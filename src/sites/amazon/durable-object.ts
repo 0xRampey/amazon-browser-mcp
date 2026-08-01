@@ -1,4 +1,6 @@
 import { QueueFullError, SerialQueue } from "../../browser/serial-queue";
+import { resolveAmazonBrowserBackend } from "../../browser/amazon-backend";
+import { executeLocalAmazonOperation } from "../../browser/local-agent-executor";
 import type { Env } from "../../env";
 import { executeAmazonOperation } from "./service";
 import {
@@ -20,18 +22,16 @@ const JSON_HEADERS = {
 } as const;
 
 /**
- * Serializes access to the one persistent Amazon Browserbase Context.
+ * Serializes access to the configured Amazon browser runtime.
  *
  * Every caller must use the same named Durable Object id (the gateway uses
  * `amazon-primary`) and POST JSON to `/execute`. Do not wrap slow browser work
  * in `blockConcurrencyWhile`; this instance queue intentionally allows new
  * requests to enter, be bounded, and wait in FIFO order.
  *
- * Integration seam: `./service.ts` must export
- * `executeAmazonOperation(env, request): Promise<Record<string, unknown>>`.
- * It must return only schema-validated, privacy-filtered data. Raw HTML,
- * cookies, connection URLs, headers, and upstream error text must never cross
- * that function boundary.
+ * The selected executor must return only schema-validated, privacy-filtered
+ * data. Raw HTML, cookies, connection URLs, headers, and upstream error text
+ * must never cross that function boundary.
  */
 export class AmazonBrowser implements DurableObject {
   private readonly queue = new SerialQueue(MAX_OPERATION_QUEUE_DEPTH);
@@ -40,11 +40,12 @@ export class AmazonBrowser implements DurableObject {
   constructor(
     _state: DurableObjectState,
     private readonly env: Env,
-    execute: AmazonOperationExecutor = executeAmazonOperation,
+    execute?: AmazonOperationExecutor,
   ) {
     // Cloudflare supplies two constructor arguments. The optional executor is a
-    // narrow test seam and defaults to the real Browserbase service.
-    this.execute = execute;
+    // narrow test seam. Production defaults to the local VPC-backed runtime;
+    // Browserbase remains an explicit fallback.
+    this.execute = execute ?? executorForEnvironment(env);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -110,6 +111,19 @@ export class AmazonBrowser implements DurableObject {
         "The internal browser operation could not be completed.",
       );
     }
+  }
+}
+
+export function executorForEnvironment(env: Env): AmazonOperationExecutor {
+  switch (resolveAmazonBrowserBackend(env.AMAZON_BROWSER_BACKEND)) {
+    case "local":
+      return executeLocalAmazonOperation;
+    case "browserbase":
+      return executeAmazonOperation;
+    default:
+      return async () => {
+        throw new AmazonOperationError("TEMPORARY_FAILURE");
+      };
   }
 }
 

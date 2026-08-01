@@ -26,8 +26,15 @@
       "new_sqlite_classes": ["AmazonBrowser"]
     }
   ],
+  "vpc_services": [
+    {
+      "binding": "LOCAL_BROWSER_AGENT",
+      "service_id": "REPLACE_WITH_VPC_SERVICE_ID"
+    }
+  ],
   "vars": {
     "ALLOWED_GITHUB_USER_ID": "REPLACE_WITH_ALLOWED_GITHUB_USER_ID",
+    "AMAZON_BROWSER_BACKEND": "local",
     "AMAZON_MARKETPLACE": "www.amazon.com",
     "BROWSERBASE_REGION": "us-west-2"
   },

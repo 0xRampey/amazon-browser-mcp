@@ -74,7 +74,7 @@ export function createAmazonMcpServer(gateway: AmazonGateway): McpServer {
     {
       title: "Check Amazon session",
       description:
-        "Check whether the private Browserbase context is signed in to Amazon. Returns status only, never account identity, cookies, or a login-control URL.",
+        "Check whether the private Amazon browser profile is signed in. Returns status only, never account identity, cookies, credentials, or a login-control URL.",
       inputSchema: {},
       annotations: readOnlyAnnotations,
     },

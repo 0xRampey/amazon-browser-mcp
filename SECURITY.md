@@ -11,17 +11,34 @@ Never commit or print:
 - `BROWSERBASE_API_KEY`
 - `AMAZON_CONTEXT_ID`
 - `GITHUB_CLIENT_SECRET`
+- `LOCAL_BROWSER_AGENT_SECRET`
+- Cloudflare Tunnel tokens
 - OAuth access or refresh tokens
 - Browserbase connection or Live View URLs
-- Cookies, storage state, raw page HTML, screenshots, or authenticated fixtures
+- Local browser profiles, cookies, storage state, raw page HTML, screenshots,
+  or authenticated fixtures
 
 Use a dedicated `OAUTH_KV` namespace for this Worker. Reusing a namespace with another OAuth provider can mix client, grant, token, and transient-state records across deployments.
 
-Rotate the Browserbase key and revoke the Amazon Context if either may have leaked. Revoke the GitHub OAuth app and Worker grants if connector authorization may have leaked.
+Rotate the local-agent HMAC secret and Tunnel token if either may have leaked.
+Rotate the Browserbase key and revoke the Amazon Context if either fallback
+credential may have leaked. Revoke the GitHub OAuth app and Worker grants if
+connector authorization may have leaked.
 
 ## Data boundary
 
-Browserbase stores the dedicated Chromium Context, which contains reusable Amazon authentication state. It is encrypted at rest but remains equivalent to a logged-in browser profile. Production reads must use `persist: false`, and only one session may use the Context at a time.
+The primary runtime stores reusable Amazon authentication state only in a
+dedicated local Chromium profile. That profile is equivalent to a logged-in
+browser and must remain outside the repository with user-only filesystem
+permissions. The code removes Chrome's `Login Data*` password databases before
+and after interactive login and before every production start; it never exports
+the Cookies database. The localhost agent accepts only signed, replay-protected
+operations, and its Cloudflare Tunnel has no public hostname.
+
+When the explicit Browserbase fallback is selected, Browserbase stores the
+dedicated Chromium Context. It is encrypted at rest but remains equivalent to a
+logged-in browser profile. Production fallback reads must use `persist: false`,
+and only one session may use the Context at a time.
 
 Amazon-derived strings are untrusted data. The parser must remain deterministic and allowlisted; it must never send page content to an LLM or return raw DOM/page text.
 
