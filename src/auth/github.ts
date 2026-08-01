@@ -22,6 +22,10 @@ const TRUSTED_CONNECTOR_REDIRECT_ORIGINS = new Set([
   "https://claude.ai",
 ]);
 
+const TRUSTED_NATIVE_CONNECTOR_REDIRECT_URIS = new Set([
+  "http://127.0.0.1:43219/callback/YHt75ATwByUW",
+]);
+
 const securityHeaders = {
   "Cache-Control": "no-store",
   "Content-Security-Policy":
@@ -468,13 +472,15 @@ function hasSupportedScopes(scopes: unknown): scopes is string[] {
 function isTrustedRedirectUri(value: string): boolean {
   try {
     const url = new URL(value);
-    return (
+    const trustedHttpsConnector =
       url.protocol === "https:" &&
       url.username === "" &&
       url.password === "" &&
       url.hash === "" &&
-      TRUSTED_CONNECTOR_REDIRECT_ORIGINS.has(url.origin)
-    );
+      TRUSTED_CONNECTOR_REDIRECT_ORIGINS.has(url.origin);
+    const trustedNativeConnector =
+      url.href === value && TRUSTED_NATIVE_CONNECTOR_REDIRECT_URIS.has(value);
+    return trustedHttpsConnector || trustedNativeConnector;
   } catch {
     return false;
   }
@@ -498,11 +504,16 @@ function parsePendingConsent(value: string): PendingConsent | undefined {
   const clientName = Reflect.get(parsed, "clientName");
   const redirectOrigin = Reflect.get(parsed, "redirectOrigin");
   const browserBindingHash = Reflect.get(parsed, "browserBindingHash");
+  const redirectUri =
+    typeof authRequest === "object" && authRequest !== null
+      ? Reflect.get(authRequest, "redirectUri")
+      : undefined;
   if (
     typeof authRequest !== "object" ||
     authRequest === null ||
     typeof Reflect.get(authRequest, "clientId") !== "string" ||
-    typeof Reflect.get(authRequest, "redirectUri") !== "string" ||
+    typeof redirectUri !== "string" ||
+    !isTrustedRedirectUri(redirectUri) ||
     !hasSupportedScopes(Reflect.get(authRequest, "scope")) ||
     typeof githubUser !== "object" ||
     githubUser === null ||
@@ -513,7 +524,7 @@ function parsePendingConsent(value: string): PendingConsent | undefined {
     clientName.length < 1 ||
     clientName.length > 100 ||
     typeof redirectOrigin !== "string" ||
-    !TRUSTED_CONNECTOR_REDIRECT_ORIGINS.has(redirectOrigin) ||
+    redirectOrigin !== new URL(redirectUri).origin ||
     typeof browserBindingHash !== "string" ||
     !/^[a-f0-9]{64}$/u.test(browserBindingHash)
   ) {
@@ -534,7 +545,8 @@ export function validateConnectorRegistration(
   ) {
     return {
       code: "invalid_redirect_uri",
-      description: "Only approved ChatGPT and Claude connector callbacks are allowed.",
+      description:
+        "Only approved ChatGPT, Claude, and this Codex native callback are allowed.",
       status: 400,
     };
   }

@@ -35,7 +35,7 @@ describe("GitHub OAuth state helpers", () => {
 });
 
 describe("connector client policy", () => {
-  it("allows only official ChatGPT and Claude callback origins at registration", () => {
+  it("allows official hosted connectors and the exact Codex native callback", () => {
     expect(
       validateConnectorRegistration({
         clientMetadata: {
@@ -49,12 +49,35 @@ describe("connector client policy", () => {
     expect(
       validateConnectorRegistration({
         clientMetadata: {
-          client_name: "Spoofed connector",
-          redirect_uris: ["https://chatgpt.com.evil.example/callback"],
+          client_name: "Codex",
+          redirect_uris: ["http://127.0.0.1:43219/callback/YHt75ATwByUW"],
         },
         request: new Request("https://worker.example/oauth/register", { method: "POST" }),
       }),
-    ).toMatchObject({ code: "invalid_redirect_uri", status: 400 });
+    ).toBeUndefined();
+  });
+
+  it.each([
+    "http://127.0.0.1:43220/callback/YHt75ATwByUW",
+    "http://127.0.0.1:43219/callback/wrong",
+    "http://127.0.0.1:43219/callback/YHt75ATwByUW?next=https://evil.example",
+    "http://localhost:43219/callback/YHt75ATwByUW",
+    "http://[::1]:43219/callback/YHt75ATwByUW",
+    "https://chatgpt.com.evil.example/callback",
+  ])("rejects near-miss or malicious callback %s", (redirectUri) => {
+    const result = validateConnectorRegistration({
+      clientMetadata: {
+        client_name: "Spoofed connector",
+        redirect_uris: [redirectUri],
+      },
+      request: new Request("https://worker.example/oauth/register", { method: "POST" }),
+    });
+
+    expect(result).toMatchObject({
+      code: "invalid_redirect_uri",
+      description: "Only approved ChatGPT, Claude, and this Codex native callback are allowed.",
+      status: 400,
+    });
   });
 
   it("rejects an untrusted authorization redirect before creating state", async () => {
@@ -165,6 +188,64 @@ describe("connector client policy", () => {
     );
   });
 
+  it("completes consent for the exact Codex native callback", async () => {
+    const redirectUri = "http://127.0.0.1:43219/callback/YHt75ATwByUW";
+    const redirectTo = `${redirectUri}?code=connector-code&state=client-state`;
+    const { env, completeAuthorization } = testEnvironment({
+      redirectUri,
+      clientRedirectUris: [redirectUri],
+      completeRedirectTo: redirectTo,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(Response.json({ access_token: "github-token" }))
+        .mockResolvedValueOnce(
+          Response.json({ id: FIXTURE_GITHUB_USER_ID_NUMBER, login: "allowed-user" }),
+        ),
+    );
+
+    const start = await githubAuthorizationHandler.fetch(
+      new Request("https://worker.example/authorize"),
+      env,
+    );
+    const stateCookie = start.headers.getSetCookie()[0]!.split(";", 1)[0]!;
+    const githubState = new URL(start.headers.get("Location")!).searchParams.get("state")!;
+    const callback = await githubAuthorizationHandler.fetch(
+      new Request(
+        `https://worker.example/callback?state=${encodeURIComponent(githubState)}&code=github-code`,
+        { headers: { Cookie: stateCookie } },
+      ),
+      env,
+    );
+
+    expect(callback.status).toBe(200);
+    expect(callback.headers.get("Content-Security-Policy")).toContain(
+      "form-action 'self' http://127.0.0.1:43219",
+    );
+    const consentState = (await callback.text()).match(
+      /name="consent_state" value="([^"]+)"/u,
+    )?.[1];
+    const approval = await githubAuthorizationHandler.fetch(
+      new Request("https://worker.example/approve", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Cookie: stateCookie,
+        },
+        body: new URLSearchParams({ consent_state: consentState!, decision: "allow" }),
+      }),
+      env,
+    );
+
+    expect(approval.status).toBe(200);
+    expect(await approval.text()).toContain(
+      "http://127.0.0.1:43219/callback/YHt75ATwByUW?code=connector-code",
+    );
+    expect(completeAuthorization).toHaveBeenCalledOnce();
+  });
+
   it("rejects a consent POST without the original browser binding", async () => {
     const { env, completeAuthorization } = testEnvironment();
     vi.stubGlobal(
@@ -227,6 +308,7 @@ function testEnvironment(
     redirectUri?: string;
     clientRedirectUris?: string[];
     scopes?: string[];
+    completeRedirectTo?: string;
   } = {},
 ) {
   const values = new Map<string, string>();
@@ -253,7 +335,7 @@ function testEnvironment(
     redirectUris: options.clientRedirectUris ?? [redirectUri],
   };
   const completeAuthorization = vi.fn(async () => ({
-    redirectTo: "https://chatgpt.com/connector/complete",
+    redirectTo: options.completeRedirectTo ?? "https://chatgpt.com/connector/complete",
   }));
   const oauthProvider = {
     parseAuthRequest: vi.fn(async () => authRequest),
